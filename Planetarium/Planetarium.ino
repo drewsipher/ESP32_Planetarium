@@ -25,9 +25,9 @@ const int TIMER_BUTTON = 15;
 // States
 bool isOn = false;
 bool motorRunning = true;
-bool motorDirection = true; // true = forward, false = backward
+int motorDirection = 0; // 1 = forward, -1 = backward
 
-int timerMode = 0;          // 0 = Always On, 1 = 30 Min, 2 = 60 Min
+bool timerMode = 0;          // false = 30 Min, true = 60 Min
 
 unsigned long _timerStart = 0;
 unsigned long _timerDuration = 0;
@@ -41,13 +41,14 @@ bool lastState_Power = HIGH;
 
 bool state_Meteor = LOW;
 
+uint8_t bulb_brightness = 128;
+
 
 Button leftButton(LEFT_BUTTON);
 Button rightButton(RIGHT_BUTTON);
 Button meteorButton(METEOR_BUTTON);
 Button powerButton(POWER_STOP_BUTTON);
 Button timerButton(TIMER_BUTTON);
-
 
 void setup() {
   // List of all GPIO pins to set as LOW
@@ -65,6 +66,7 @@ void setup() {
     // Set pin modes
     pinMode(MOTOR_FORWARD, OUTPUT);
     pinMode(MOTOR_BACKWARD, OUTPUT);
+    pinMode (LIMIT_SWITCH, INPUT_PULLUP);
     
     leftButton.init();
     rightButton.init();
@@ -76,56 +78,64 @@ void setup() {
     pinMode(RIGHT_BUTTON_LED, OUTPUT);
     pinMode(TIMER_LED_30MIN, OUTPUT);
     pinMode(TIMER_LED_60MIN, OUTPUT);
-    pinMode(LIMIT_SWITCH, INPUT_PULLUP);
     pinMode(METEOR_BULB, OUTPUT);
     pinMode(MAIN_BULB, OUTPUT);
     
     // Initialize outputs
-    digitalWrite(MOTOR_FORWARD, LOW);
-    digitalWrite(MOTOR_BACKWARD, LOW);
     digitalWrite(LEFT_BUTTON_LED, LOW);
     digitalWrite(RIGHT_BUTTON_LED, LOW);
     digitalWrite(TIMER_LED_30MIN, LOW);
     digitalWrite(TIMER_LED_60MIN, LOW);
     digitalWrite(METEOR_BULB, HIGH);
-    digitalWrite(MAIN_BULB, LOW);
-    
+    analogWrite(MAIN_BULB, bulb_brightness);
+
+    motorOff();
+    pressedTimer(); //Set the timer to 60 min
 }
 
-void meteor(bool on)
+void motorLeft()
 {
-  digitalWrite(METEOR_BULB, on ? LOW : HIGH);
+  motorDirection = -1;
+  digitalWrite(MOTOR_FORWARD, HIGH);
+  digitalWrite(MOTOR_BACKWARD, LOW);
 }
 
-int8_t buttonState(bool &lastState, uint8_t button)
+void motorRight()
 {
-  if (digitalRead(button) == LOW) {
-    if (lastState == HIGH) {
-      lastState = LOW;
-      return lastState;
-    } else {
-      return -1;
-    }
-  } else {
-    if (lastState == LOW) {
-      lastState = HIGH;
-      return lastState;
-    } else {
-      return -1;
-    }
-  }
+  motorDirection = 1;
+  digitalWrite(MOTOR_FORWARD, LOW);
+  digitalWrite(MOTOR_BACKWARD, HIGH);
+}
+
+void motorOff()
+{
+  motorDirection = 0;
+  digitalWrite(MOTOR_FORWARD, LOW);
+  digitalWrite(MOTOR_BACKWARD, LOW);
 }
 
 void pressedLeft()
 {
   digitalWrite(LEFT_BUTTON_LED, HIGH);
   digitalWrite(RIGHT_BUTTON_LED, LOW);
+  if (motorDirection == 1)
+  {
+    motorOff();
+    delay(250);
+  }
+  motorLeft();
 }
 
 void pressedRight()
 {
   digitalWrite(LEFT_BUTTON_LED, LOW);
   digitalWrite(RIGHT_BUTTON_LED, HIGH);
+  if (motorDirection == -1)
+  {
+    motorOff();
+    delay(250);
+  }
+  motorRight();
 }
 
 void pressedMeteor()
@@ -134,33 +144,20 @@ void pressedMeteor()
   digitalWrite(METEOR_BULB, !state_Meteor);
 }
 
-void stopMotor()
-{
-  digitalWrite(LEFT_BUTTON_LED, LOW);
-  digitalWrite(RIGHT_BUTTON_LED, LOW);
-}
-
 void pressedTimer()
 {
-  timerMode = (timerMode + 1) % 3;
+  timerMode = !timerMode;
   _timerStart = millis();
   
-  switch (timerMode) {
-    case 0:
-      _timerDuration = 0;
-      digitalWrite(TIMER_LED_30MIN, LOW);
-      digitalWrite(TIMER_LED_60MIN, LOW);
-      break;
-    case 1:
-      _timerDuration = 3000;//30 * 60 * 1000;
-      digitalWrite(TIMER_LED_30MIN, HIGH);
-      digitalWrite(TIMER_LED_60MIN, LOW);
-      break;
-    case 2:
-      _timerDuration = 6000;//60 * 60 * 1000;
-      digitalWrite(TIMER_LED_30MIN, LOW);
-      digitalWrite(TIMER_LED_60MIN, HIGH);
-      break;
+  if (timerMode) {
+    _timerDuration = 60 * 60 * 1000;
+    digitalWrite(TIMER_LED_30MIN, LOW);
+    digitalWrite(TIMER_LED_60MIN, HIGH);
+  }
+  else {
+    _timerDuration = 30 * 60 * 1000;
+    digitalWrite(TIMER_LED_30MIN, HIGH);
+    digitalWrite(TIMER_LED_60MIN, LOW);
   }
 }
 
@@ -171,19 +168,20 @@ void checkTimer()
   unsigned long _timerCount = millis() - _timerStart;
   if (_timerCount >= _timerDuration)
   {
-    stopMotor();
-    timerMode = 0;
-    _timerDuration = 0;
-    digitalWrite(TIMER_LED_30MIN, LOW);
-    digitalWrite(TIMER_LED_60MIN, LOW);
+     pressedPowerLong();
   }
 }
 
 void pressedPower()
 {
-  stopMotor();
+  motorOff();
   digitalWrite(RIGHT_BUTTON_LED, LOW);
   digitalWrite(LEFT_BUTTON_LED, LOW);
+  //Turn off meteor if on
+  if (state_Meteor)
+  {
+    pressedMeteor();
+  }
 }
 
 void pressedPowerLong()
@@ -198,6 +196,7 @@ void pressedPowerLong()
   {
     analogWrite(RIGHT_BUTTON_LED, i);
     analogWrite(LEFT_BUTTON_LED, i);
+    analogWrite(MAIN_BULB, min(i,bulb_brightness));
     delay(2000/255);
   }
   sleep();
@@ -209,30 +208,73 @@ void sleep() {
   esp_deep_sleep_start();
 }
 
+void increaseBulbBrightness()
+{
+  if (bulb_brightness == 255) return;
+  bulb_brightness++;
+  analogWrite(MAIN_BULB, bulb_brightness);
+}
+
+void decreaseBulbBrightness()
+{
+  if (bulb_brightness == 0) return;
+  bulb_brightness--;
+  analogWrite(MAIN_BULB, bulb_brightness);
+}
+
 void loop()
 {
-  if (leftButton.pressed())
-  {
-    pressedLeft();
-  }
 
-  if (rightButton.pressed())
+  if (rightButton.pressed() == -1)
   {
     pressedRight();
   }
+  if (rightButton.longPressed())
+  {
+    while(rightButton.held())
+    {
+      //make sure the button can be marked as released
+      rightButton.pressed();
+      increaseBulbBrightness();
+      delay(8);
+    }
+  }
+
+  if (leftButton.pressed() == -1)
+  {
+    pressedLeft();
+  } 
+  if (leftButton.longPressed())
+  {
+    while(leftButton.held())
+    {
+      //make sure the button can be marked as released
+      leftButton.pressed();
+      decreaseBulbBrightness();
+      delay(8);
+    }
+  }
   
-  if (meteorButton.pressed())
+  if (meteorButton.pressed() == 1)
   {
     pressedMeteor();
   } 
   
-  if (timerButton.pressed()) {
+  if (timerButton.pressed() == 1) 
+  {
     pressedTimer();  
   }
 
-  if (powerButton.pressed()) {
+  if (powerButton.pressed() == 1) 
+  {
     pressedPower();
-  } else if (powerButton.longPressed())
+  } 
+  if (powerButton.longPressed())
+  {
+    pressedPowerLong();
+  }
+
+  if (digitalRead(LIMIT_SWITCH) == HIGH)
   {
     pressedPowerLong();
   }
