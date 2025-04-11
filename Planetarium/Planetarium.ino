@@ -163,8 +163,6 @@ void pressedTimer()
 
 void checkTimer()
 {
-  if (timerMode == 0)
-    return;
   unsigned long _timerCount = millis() - _timerStart;
   if (_timerCount >= _timerDuration)
   {
